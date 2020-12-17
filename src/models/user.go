@@ -13,13 +13,22 @@ type User struct {
 	Username         string `gorm:"index"`
 	Password         string
 	GoogleAuthSecret string `json:"-"`
+	Recommender      int    `gorm:"index"`
 	IsBindGoogleAuth bool   `gorm:"index"`
 	Avatar           string
 }
 
-func (m *Model) RegisterUser(username, password string) (*User, error) {
+func (m *Model) RegisterUser(username, password string, recommenderID int) (*User, error) {
+	err := m.UserValidator.ValidUsername(username)
+	if err != nil {
+		return nil, err
+	}
+	err = m.UserValidator.ValidPassword(password)
+	if err != nil {
+		return nil, err
+	}
 	user := &User{}
-	err := m.db.Where("username=?", username).Select("id").First(user).Error
+	err = m.DB.Where("username=?", username).Select("id").First(user).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
@@ -32,8 +41,10 @@ func (m *Model) RegisterUser(username, password string) (*User, error) {
 	}
 	user.Username = username
 	user.Password = string(passwordBytes)
+	user.Recommender = recommenderID
+	// 生成谷歌验证码 secret
 	user.GoogleAuthSecret = rand.Str(16)
-	err = m.db.Create(user).Error
+	err = m.DB.Create(user).Error
 	return user, err
 }
 
@@ -60,7 +71,7 @@ func (m *Model) LoginUser(username, password string) (*User, error) {
 
 func (m *Model) GetUserByUsername(username string) (*User, error) {
 	user := &User{}
-	err := m.db.First(user, "username=?", username).Error
+	err := m.DB.First(user, "username=?", username).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
@@ -73,7 +84,7 @@ func (m *Model) GetUserByUsername(username string) (*User, error) {
 
 func (m *Model) GetUserByID(id int) (*User, error) {
 	user := &User{}
-	err := m.db.First(user, "id=?", id).Error
+	err := m.DB.First(user, "id=?", id).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
@@ -106,7 +117,7 @@ func (m *Model) GetGoogleAuthenticatorQRCodeUrl(loginUserID, with, height int) (
 	if user == nil {
 		return "", fmt.Errorf("用户[id=%d]不存在", loginUserID)
 	} else {
-		return m.gac.GetQRCodeURI(user.GoogleAuthSecret, user.Username, with, height), nil
+		return m.GAC.GetQRCodeURI(user.GoogleAuthSecret, user.Username, with, height), nil
 	}
 }
 
@@ -119,7 +130,7 @@ func (m *Model) VerifyGoogleAuthCode(username, googleAuthCode string) error {
 	if user == nil {
 		return fmt.Errorf("用户名 %s 不存在", username)
 	}
-	ok, err := m.gac.Verify(user.GoogleAuthSecret, googleAuthCode)
+	ok, err := m.GAC.Verify(user.GoogleAuthSecret, googleAuthCode)
 	if err != nil {
 		return err
 	}
@@ -131,18 +142,30 @@ func (m *Model) VerifyGoogleAuthCode(username, googleAuthCode string) error {
 }
 
 // 绑定谷歌验证器，绑定后不可修改
-func (m *Model) BindGoogleAuth(username, googleAuthCode string) error {
-	err := m.VerifyGoogleAuthCode(username, googleAuthCode)
+func (m *Model) BindGoogleAuth(userID int, googleAuthCode string) error {
+	user, err := m.GetUserByID(userID)
+	if err != nil {
+		return err
+	}
+	err := m.VerifyGoogleAuthCode(user.Username, googleAuthCode)
 	if err != nil {
 		return err
 	} else {
-		return m.db.Model(&User{}).Where("username=?", username).UpdateColumn("is_bind_google_auth", true).Error
+		return m.DB.Model(&User{}).Where("id=?", userID).UpdateColumn("is_bind_google_auth", true).Error
 	}
 }
 
 // 重置密码
-func (m *Model) ResetPassword(username, googleAuthCode, newPassword string) error {
-	err := m.VerifyGoogleAuthCode(username, googleAuthCode)
+func (m *Model) ResetPassword(userID int, googleAuthCode, newPassword string) error {
+	err := m.UserValidator.ValidPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	user, err := m.GetUserByID(userID)
+	if err != nil {
+		return err
+	}
+	err = m.VerifyGoogleAuthCode(user.Username, googleAuthCode)
 	if err != nil {
 		return err
 	}
@@ -150,5 +173,34 @@ func (m *Model) ResetPassword(username, googleAuthCode, newPassword string) erro
 	if err != nil {
 		return err
 	}
-	return m.db.Where("username=?", username).Updates(&User{Password: string(password)}).Error
+	return m.DB.Where("id=?", userID).Updates(&User{Password: string(password)}).Error
+}
+
+// 获得推荐人(自带缓存)
+func (m *Model) GetRecommender(userID int) (recommenderID int, err error) {
+	recommenderID, err = m.RecommendersCache.Get(userID)
+	if err != nil {
+		return 0, err
+	}
+	if recommenderID < 0 {
+		user := &User{}
+		err = m.DB.Where("id=?", userID).Select("recommender").First(user).Error
+		if err != nil {
+			return 0, err
+		} else {
+			err = m.RecommendersCache.Set(userID, user.Recommender)
+			if err != nil {
+				return 0, err
+			} else {
+				return user.Recommender, nil
+			}
+		}
+	} else {
+		return recommenderID, nil
+	}
+}
+
+// 设置用户头像
+func (m *Model) SetUserAvatar(userID int, avatar string) error {
+	return m.DB.Where("id=?", userID).Updates(&User{Avatar: avatar}).Error
 }

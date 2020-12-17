@@ -5,26 +5,38 @@ import (
 	"regexp"
 )
 
-var User = &user{
-	nameReg:   regexp.MustCompile("[a-z0-9]{8,16}"),
-	passwdReg: regexp.MustCompile("[\\w]{8,16}"),
+//var User = &user{
+//	username:   regexp.MustCompile("^[a-z0-9]{8,16}$"),
+//	password: regexp.MustCompile("^[\\w]{8,16}$"),
+//}
+
+type User interface {
+	ValidUsername(username string) error
+	ValidPassword(password string) error
+}
+
+func NewUser(username, password *regexp.Regexp) User {
+	return &user{
+		username: username,
+		password: password,
+	}
 }
 
 type user struct {
-	nameReg   *regexp.Regexp
-	passwdReg *regexp.Regexp
+	username *regexp.Regexp
+	password *regexp.Regexp
 }
 
 func (u *user) ValidUsername(username string) error {
-	if !u.nameReg.MatchString(username) {
-		return errors.UsernameMustBeLowercaseLettersAndNumbersLen8To16
+	if !u.username.MatchString(username) {
+		return errors.UsernameIncorrectFormat
 	}
 	return nil
 }
 
-func (u user) ValidUserPassword(password string) error {
-	if !u.passwdReg.MatchString(password) {
-		return errors.PasswordMustBeLettersAndNumbersLen8To16
+func (u user) ValidPassword(password string) error {
+	if !u.password.MatchString(password) {
+		return errors.PasswordIncorrectFormat
 	}
 	return nil
 }
