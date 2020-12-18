@@ -12,4 +12,4 @@ require (
 	github.com/morgine/pkg v0.0.0-20201215094710-dd28233bfdf4
 )
 
-replace github.com/morgine/pkg => ../morgine/pkg
+replace github.com/morgine/pkg => ../pkg

@@ -147,7 +147,7 @@ func (m *Model) BindGoogleAuth(userID int, googleAuthCode string) error {
 	if err != nil {
 		return err
 	}
-	err := m.VerifyGoogleAuthCode(user.Username, googleAuthCode)
+	err = m.VerifyGoogleAuthCode(user.Username, googleAuthCode)
 	if err != nil {
 		return err
 	} else {

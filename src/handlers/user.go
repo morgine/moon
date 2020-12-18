@@ -38,6 +38,7 @@ func NewUser(opts *Options) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
+	recommendersClient := cache.WithPrefixClient("recommenders_", opts.CacheClient)
 	return &User{
 		m: &models.Model{
 			DB:  opts.DB,
@@ -46,14 +47,14 @@ func NewUser(opts *Options) (*User, error) {
 				regexp.MustCompile("^[a-z0-9]{8,16}$"), // 用户名验证器
 				regexp.MustCompile("^[\\w]{8,16}$"),    // 密码验证器
 			),
-			RecommendersCache: cache.NewRecommenders(cache.WithPrefixClient("recommenders_", opts.CacheClient)),
+			RecommendersCache: cache.NewRecommenders(recommendersClient),
 		},
 		opts: opts,
 	}, nil
 }
 
 // 注册账号，并绑定推荐人
-func (h *User) Register() gin.HandlerFunc {
+func (usr *User) Register() gin.HandlerFunc {
 	type params struct {
 		Username      string
 		Password      string
@@ -65,7 +66,7 @@ func (h *User) Register() gin.HandlerFunc {
 		if err != nil {
 			SendError(ctx, err)
 		} else {
-			_, err = h.m.RegisterUser(ps.Username, ps.Password, ps.RecommenderID)
+			_, err = usr.m.RegisterUser(ps.Username, ps.Password, ps.RecommenderID)
 			if err != nil {
 				SendError(ctx, err)
 			} else {
@@ -75,21 +76,21 @@ func (h *User) Register() gin.HandlerFunc {
 	}
 }
 
-func (h *User) getToken(ctx *gin.Context) string {
+func (usr *User) getToken(ctx *gin.Context) string {
 	return ctx.Request.Header.Get("Authorization")
 }
 
 // 用户鉴权
-func (h *User) Auth(ctx *gin.Context) {
-	token := h.getToken(ctx)
+func (usr *User) Auth(ctx *gin.Context) {
+	token := usr.getToken(ctx)
 	if len(token) == 0 {
 		return
 	}
-	user, err := h.decryptToken(token)
+	user, err := usr.decryptToken(token)
 	if err != nil {
 		SendError(ctx, err)
 	} else {
-		ok, err := h.opts.Session.CheckAndRefreshToken(user, token, h.opts.AuthExpires)
+		ok, err := usr.opts.Session.CheckAndRefreshToken(user, token, usr.opts.AuthExpires)
 		if err != nil {
 			SendError(ctx, err)
 		} else {
@@ -108,7 +109,7 @@ func (h *User) Auth(ctx *gin.Context) {
 }
 
 // 获得登陆用户ID，需要在用户鉴权之后才有效
-func (h *User) GetLoginUser(ctx *gin.Context) (userID int, ok bool) {
+func (usr *User) GetLoginUser(ctx *gin.Context) (userID int, ok bool) {
 	user, ok := ctx.Get("auth_user_id")
 	if ok {
 		return user.(int), true
@@ -118,10 +119,10 @@ func (h *User) GetLoginUser(ctx *gin.Context) (userID int, ok bool) {
 }
 
 // 获得登陆用户的账户信息
-func (h *User) GetInfo(ctx *gin.Context) {
-	userID, ok := h.GetLoginUser(ctx)
+func (usr *User) GetInfo(ctx *gin.Context) {
+	userID, ok := usr.GetLoginUser(ctx)
 	if ok {
-		user, err := h.m.GetUserByID(userID)
+		user, err := usr.m.GetUserByID(userID)
 		if err != nil {
 			SendError(ctx, err)
 		} else {
@@ -131,7 +132,7 @@ func (h *User) GetInfo(ctx *gin.Context) {
 }
 
 // Login 登陆账号
-func (h *User) Login() gin.HandlerFunc {
+func (usr *User) Login() gin.HandlerFunc {
 	type params struct {
 		Username string
 		Password string
@@ -142,16 +143,16 @@ func (h *User) Login() gin.HandlerFunc {
 		if err != nil {
 			SendError(ctx, err)
 		} else {
-			user, err := h.m.LoginUser(ps.Username, ps.Password)
+			user, err := usr.m.LoginUser(ps.Username, ps.Password)
 			if err != nil {
 				SendError(ctx, err)
 			} else {
 				uid := strconv.Itoa(user.ID)
-				token, err := h.encryptToken(uid)
+				token, err := usr.encryptToken(uid)
 				if err != nil {
 					SendError(ctx, err)
 				} else {
-					err = h.opts.Session.SaveToken(uid, token, h.opts.AuthExpires)
+					err = usr.opts.Session.SaveToken(uid, token, usr.opts.AuthExpires)
 					if err != nil {
 						SendError(ctx, err)
 					} else {
@@ -164,20 +165,20 @@ func (h *User) Login() gin.HandlerFunc {
 }
 
 // 获得谷歌验证器二维码地址
-func (h *User) GetGoogleAuthenticatorQRCodeUrl() gin.HandlerFunc {
+func (usr *User) GetGoogleAuthenticatorQRCodeUrl() gin.HandlerFunc {
 	type params struct {
 		With   int
 		Height int
 	}
 	return func(ctx *gin.Context) {
-		userID, ok := h.GetLoginUser(ctx)
+		userID, ok := usr.GetLoginUser(ctx)
 		if ok {
 			ps := &params{}
 			err := ctx.Bind(ps)
 			if err != nil {
 				SendError(ctx, err)
 			} else {
-				imgUrl, err := h.m.GetGoogleAuthenticatorQRCodeUrl(userID, ps.With, ps.Height)
+				imgUrl, err := usr.m.GetGoogleAuthenticatorQRCodeUrl(userID, ps.With, ps.Height)
 				if err != nil {
 					SendError(ctx, err)
 				} else {
@@ -189,19 +190,19 @@ func (h *User) GetGoogleAuthenticatorQRCodeUrl() gin.HandlerFunc {
 }
 
 // 绑定谷歌验证器
-func (h *User) BindGoogle() gin.HandlerFunc {
+func (usr *User) BindGoogle() gin.HandlerFunc {
 	type params struct {
 		GoogleCode string
 	}
 	return func(ctx *gin.Context) {
-		userID, ok := h.GetLoginUser(ctx)
+		userID, ok := usr.GetLoginUser(ctx)
 		if ok {
 			ps := &params{}
 			err := ctx.Bind(ps)
 			if err != nil {
 				SendError(ctx, err)
 			} else {
-				err := h.m.BindGoogleAuth(userID, ps.GoogleCode)
+				err := usr.m.BindGoogleAuth(userID, ps.GoogleCode)
 				if err != nil {
 					SendError(ctx, err)
 				} else {
@@ -213,24 +214,24 @@ func (h *User) BindGoogle() gin.HandlerFunc {
 }
 
 // ResetPassword 重置密码
-func (h *User) ResetPassword() gin.HandlerFunc {
+func (usr *User) ResetPassword() gin.HandlerFunc {
 	type params struct {
 		NewPassword string
 		GoogleCode  string
 	}
 	return func(ctx *gin.Context) {
-		userID, ok := h.GetLoginUser(ctx)
+		userID, ok := usr.GetLoginUser(ctx)
 		if ok {
 			ps := &params{}
 			err := ctx.Bind(ps)
 			if err != nil {
 				SendError(ctx, err)
 			} else {
-				err := h.m.ResetPassword(userID, ps.GoogleCode, ps.NewPassword)
+				err := usr.m.ResetPassword(userID, ps.GoogleCode, ps.NewPassword)
 				if err != nil {
 					SendError(ctx, err)
 				} else {
-					err = h.opts.Session.RemoveUser(strconv.Itoa(userID))
+					err = usr.opts.Session.RemoveUser(strconv.Itoa(userID))
 					if err != nil {
 						SendError(ctx, err)
 					} else {
@@ -243,18 +244,53 @@ func (h *User) ResetPassword() gin.HandlerFunc {
 }
 
 // Logout 退出登陆
-func (h *User) Logout(adminID int, token string) error {
-	return h.opts.Session.RemoveToken(strconv.Itoa(adminID), token)
+func (usr *User) Logout(ctx *gin.Context) {
+	userID, ok := usr.GetLoginUser(ctx)
+	if ok {
+		token := usr.getToken(ctx)
+		if token != "" {
+			err := usr.opts.Session.RemoveToken(strconv.Itoa(userID), token)
+			if err != nil {
+				SendError(ctx, err)
+			} else {
+				SendMessage(ctx, errors.StatusOK, "已退出")
+			}
+		}
+	}
+}
+
+// SaveAvatar 保存用户头像地址
+func (usr *User) SaveAvatar() gin.HandlerFunc {
+	type params struct {
+		Avatar string
+	}
+	return func(ctx *gin.Context) {
+		userID, ok := usr.GetLoginUser(ctx)
+		if ok {
+			ps := &params{}
+			err := ctx.Bind(ps)
+			if err != nil {
+				SendError(ctx, err)
+			} else {
+				err = usr.m.SetUserAvatar(userID, ps.Avatar)
+				if err != nil {
+					SendError(ctx, err)
+				} else {
+					SendMessage(ctx, errors.StatusOK, "已保存")
+				}
+			}
+		}
+	}
 }
 
 // token 加密
-func (h *User) encryptToken(adminID string) (token string, err error) {
-	return aes.AesCBCEncrypt([]byte(fmt.Sprintf("%s:%10d", adminID, Now().UnixNano())), h.opts.AesCryptKey)
+func (usr *User) encryptToken(adminID string) (token string, err error) {
+	return aes.AesCBCEncrypt([]byte(fmt.Sprintf("%s:%10d", adminID, Now().UnixNano())), usr.opts.AesCryptKey)
 }
 
 // token 解密
-func (h *User) decryptToken(token string) (adminID string, err error) {
-	data, err := aes.AesCBCDecrypt(token, h.opts.AesCryptKey)
+func (usr *User) decryptToken(token string) (adminID string, err error) {
+	data, err := aes.AesCBCDecrypt(token, usr.opts.AesCryptKey)
 	if err != nil {
 		return "", err
 	} else {
